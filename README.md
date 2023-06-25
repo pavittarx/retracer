@@ -1,2 +1,0 @@
-# retracer
-backtesting financial instruments

@@ -8,48 +8,39 @@ from modules.backtester import Backtest
 
 import numpy as np
 
-# Configuration
+# Configuration``
 ticker=''
 period=''
 
 class Tester(Backtest):
     ticker_data = None
+    small_ema=None
+    large_ema=None
+    size=None
     count = 0
     close_count = 0
     stats = {}
 
-    def __init__(self, balance, stoploss, reward_ratio):
-        super().__init__(balance, stoploss, reward_ratio)
-        self.ticker_data = None
+    def __init__(self, params):
+        super().__init__(balance=params['balance'], stoploss=params['sl'], reward_ratio=params['reward_ratio'])
         self.reset_tradebook()
+        self.small_ema=params['small_ema']
+        self.large_ema=params['large_ema']
+        self.size = params['size']
 
-        self.profitable_trades = None
-        self.losing_trades = None
 
-    def init(self, ticker_data, size, small_ema, large_ema):
-        ticker_data["small_ema"] = (
-            ticker_data["Close"].ewm(span=small_ema, adjust=False).mean()
+    def init(self):
+        self.ticker_data["small_ema"] = (
+            self.ticker_data["Close"].ewm(span=self.small_ema, adjust=False).mean()
         )
 
-        ticker_data["large_ema"] = (
-            ticker_data["Close"].ewm(span=large_ema, adjust=False).mean()
+        self.ticker_data["large_ema"] = (
+            self.ticker_data["Close"].ewm(span=self.large_ema, adjust=False).mean()
         )
 
-        ticker_data["crossover_pos"] = np.where(
-            ticker_data["small_ema"] > ticker_data["large_ema"], "short", "long"
+        self.ticker_data["crossover_pos"] = np.where(
+            self.ticker_data["small_ema"] > self.ticker_data["large_ema"], "short", "long"
         )
-
-        ticker_data["crosspoint"] = np.where(
-            ticker_data["crossover_pos"] != ticker_data["crossover_pos"].shift(1),
-            True,
-            False,
-        )
-
-        self.small_ema = small_ema
-        self.large_ema = large_ema
-        self.ticker_data = None
-        self.ticker_data = ticker_data
-        self.size = size
 
     def load_data(self, data):
         self.ticker_data = data
@@ -60,6 +51,8 @@ class Tester(Backtest):
     def run(self):
         if self.ticker_data is None:
             raise Exception("No ticker data to run backtest on")
+        
+        self.initialize()
 
         # Skip first 200 candles
         start_index = self.large_ema
@@ -195,3 +188,6 @@ class Tester(Backtest):
                 size=self.size,
                 crossover_type=crossover_type,
             )
+
+    def strategy2(self, candle):
+        

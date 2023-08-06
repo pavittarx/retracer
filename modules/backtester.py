@@ -1,5 +1,5 @@
 import pandas as pd
-from positions import Positions
+from .positions import Positions
 
 class Backtest:
     balance = 0

@@ -1,95 +1,185 @@
-import pandas as pd;
-import datetime as datetime;
-
-import yfinance as yf;
+import pandas as pd
+import datetime as datetime
+import yfinance as yf
 
 from modules.positions import Positions
 from modules.backtester import Backtest
 
 import numpy as np
 
+import json
+
 # Configuration``
-ticker=''
-period=''
+ticker = ""
+period = ""
+balance=1000
+sma_span = 8
+lma_span = 40
+threshold = 0.0003
+stoploss = 0.1
+reward_ratio = 5
+size = 1
+
+pd.set_option("display.max_rows", None, "display.max_columns", None)
+
+
+def check_position(position, candle):
+    if position["crossover_type"] == "long":
+        if (
+            candle["Low"] < position["stoploss"]
+            and position["stoploss"] > candle["Close"]
+        ):
+            return {"price": candle["Close"], "type": "sl"}
+
+        if candle["High"] > position["target"]:
+            return {"price": position["target"], "type": "tp"}
+
+    if position["crossover_type"] == "short":
+        if (
+            candle["High"] > position["stoploss"]
+            and position["stoploss"] < candle["Close"]
+        ):
+            return {"price": candle["Close"], "type": "sl"}
+
+        if candle["Low"] < position["target"]:
+            return {"price": position["target"], "type": "tp"}
+
+    return None
+
+
+def check_signals(df, sma_span, lma_span, threshold):
+    df["small_ema"] = df["Close"].ewm(span=sma_span, adjust=False).mean()
+
+    df["large_ema"] = df["Close"].ewm(span=lma_span, adjust=False).mean()
+
+    df["cross_diff"] = df["large_ema"] - df["small_ema"]
+
+    df["crossover_type"] = np.where(df["cross_diff"] > 0, "long", "short")
+
+    df["signal"] = False
+
+    for i in range(1, len(df)):
+        diff_n = abs(df["cross_diff"].iloc[i])
+        diff_n1 = abs(df["cross_diff"].iloc[i - 1])
+
+        if diff_n <= threshold and diff_n1 > threshold:
+            df["signal"].iloc[i] = True
+
+    df["dt"] = df.index
+
+    return df
+
+
+def pos_consolidator(positions, candle, close):
+    # Checks & closes positions
+    if not positions.count() > 0:
+        return
+
+    for position in positions.get_positions():
+        exit_price = check_position(position, candle)
+
+        if exit_price is not None:
+            if exit_price is not None:
+                close(position, candle, exit_price)
+
+
+def opener(candle, params, open):
+    # Checks & opens positions
+
+    if candle["signal"] == True:
+        entry_price = candle["Close"]
+        stoploss = None
+        target = None
+
+        if candle["crossover_type"] == "short":
+            stoploss = entry_price + params["sl"]
+            target = entry_price - params["tgt"]
+
+        if candle["crossover_type"] == "long":
+            stoploss = entry_price - params["sl"]
+            target = entry_price + params["tgt"]
+
+        open(
+            entry_date=candle['dt'],
+            entry_price=entry_price,
+            stoploss=stoploss,
+            target=target,
+            size=params["size"],
+            crossover_type=candle["crossover_type"],
+        )
+
 
 class Tester(Backtest):
     ticker_data = None
-    small_ema=None
-    large_ema=None
-    size=None
     count = 0
     close_count = 0
     stats = {}
 
     def __init__(self, params):
-        super().__init__(balance=params['balance'], stoploss=params['sl'], reward_ratio=params['reward_ratio'])
+        super().__init__(
+            balance=params["balance"],
+            stoploss=params["sl"],
+            reward_ratio=params["reward_ratio"],
+        )
         self.reset_tradebook()
-        self.small_ema=params['small_ema']
-        self.large_ema=params['large_ema']
-        self.size = params['size']
-
-
-    def init(self):
-        self.ticker_data["small_ema"] = (
-            self.ticker_data["Close"].ewm(span=self.small_ema, adjust=False).mean()
-        )
-
-        self.ticker_data["large_ema"] = (
-            self.ticker_data["Close"].ewm(span=self.large_ema, adjust=False).mean()
-        )
-
-        self.ticker_data["crossover_pos"] = np.where(
-            self.ticker_data["small_ema"] > self.ticker_data["large_ema"], "short", "long"
-        )
 
     def load_data(self, data):
         self.ticker_data = data
-    
-    def print(self):
-        print(self.position)
 
     def run(self):
         if self.ticker_data is None:
             raise Exception("No ticker data to run backtest on")
-        
-        self.initialize()
+
+        check_signals(self.ticker_data, sma_span, lma_span, threshold)
 
         # Skip first 200 candles
-        start_index = self.large_ema
+        start_index = lma_span
 
-        print("Start Index", start_index, len(self.ticker_data))
-
-        while start_index < len(self.ticker_data):
-            self.strategy(self.ticker_data.iloc[start_index])
-            start_index += 1
+        while start_index < len(self.ticker_data) -1:
+            candle = self.ticker_data.iloc[start_index]
             
+            pos_consolidator(self.positions, candle, self.close)
+            opener(
+                candle,
+                {
+                    "sl": stoploss,
+                    "tgt": reward_ratio * stoploss,
+                    'size': size
+                },
+                self.open,
+            )
+            
+            start_index = start_index + 1
+
         self.calc_stats()
 
     def calc_stats(self):
         crosspoints = len(
-            self.ticker_data[self.large_ema :][self.ticker_data["crosspoint"] == True]
+            self.ticker_data[lma_span :][self.ticker_data["signal"] == True]
         )
         
+        # print("Trade Book", self.trade_book)
+
         total_trades = len(self.trade_book)
         profitable_trades = self.trade_book[self.trade_book["PnL"] > 0]
         losing_trades = self.trade_book[self.trade_book["PnL"] < 0]
-        win_percentage = len(profitable_trades) / total_trades * 100
-        lose_percentage = len(losing_trades) / total_trades * 100
-        
+        win_percentage = total_trades > 0 and len(profitable_trades) / total_trades * 100
+        lose_percentage = total_trades > 0 and len(losing_trades) / total_trades * 100
+
         self.stats = {
             **self.stats,
-            "date_range": f'{self.trade_book["entry_date"].iloc[0]} - {self.trade_book["exit_date"].iloc[-1]}',
+            "date_range": total_trades > 0 and f'{self.trade_book["entry_date"].iloc[0]} - {self.trade_book["exit_date"].iloc[-1]}',
             "open_positions": self.positions.count(),
             "open_counter": self.count,
             "close_counter": self.close_count,
             "total_trades": total_trades,
             "crosspoints_count": crosspoints,
-            "small_ema": self.small_ema,
-            "large_ema": self.large_ema,
+            "sma_span": sma_span,
+            "lma_span": lma_span,
             "total_trades": len(self.trade_book),
             "pnl": self.trade_book["PnL"].sum(),
             "initial_balance": self.start_balance,
-            "trade_size": self.size,
+            "trade_size": size,
             "stoploss": self.stoploss,
             "target": self.target,
             "profitable_trades": profitable_trades,
@@ -97,97 +187,35 @@ class Tester(Backtest):
             "profitable_trades_count": len(profitable_trades),
             "losing_trades_count": len(losing_trades),
             "win_percentage": win_percentage,
-            "lose_percentage": lose_percentage,
-            "date_range": f'{self.trade_book["entry_date"].iloc[0]} - {self.trade_book["exit_date"].iloc[-1]}',
+            "lose_percentage": lose_percentage
         }
 
-    def check_position(self, position, candle):
-        if position["crossover_type"] == "long":
-            if (
-                candle["Low"] < position["stoploss"]
-                and position["stoploss"] > candle["Close"]
-            ):
-                return {"price": candle["Close"], "type": "sl"}
 
-            if candle["High"] > position["target"]:
-                return {"price": position["target"], "type": "tp"}
+t = Tester({
+    'sl': stoploss,
+    'reward_ratio': reward_ratio,
+    'balance': balance
+    })
 
-        if position["crossover_type"] == "short":
-            if (
-                candle["High"] > position["stoploss"]
-                and position["stoploss"] < candle["Close"]
-            ):
-                return {"price": candle["Close"], "type": "sl"}
+tdata = yf.download("EURUSD=X", period="10d", interval="15m")
+tdata['dt'] = tdata.index
+tdata['dx'] = tdata['dt'].apply(lambda x: int(round(x.timestamp() * 1000)))
 
-            if candle["Low"] < position["target"]:
-                return {"price": position["target"], "type": "tp"}
+print(tdata)
 
-        return None
+t.load_data(tdata)
+t.run()
 
-    def strategy(self, candle):
-        if self.positions.count() > 0:
-            # check if target met or stoploss hit
-            # calculate trade results, PnL
-            # close position
+# print(t.stats)
 
-            for position in self.positions.get_positions():
-                exit_price = self.check_position(position, candle)
+tdata = t.ticker_data
 
-                closed = False
-                next_candle = candle
+tdata['dt'] = tdata['dt'].astype(str)
 
-                if candle["i"] < len(ticker_data) - 1:
-                    next_candle = self.ticker_data.iloc[candle["i"] + 1]
+result = json.dumps({
+    'candles': tdata.to_dict('records'),
+    # 'stats': t.stats.to_dict('records'),
+})
 
-                if exit_price is not None:
-                    sl_candles = yf.download(
-                        ticker,
-                        start=position["entry_date"],
-                        end=next_candle["dt"],
-                        interval=sl_timeframe,
-                        progress=False,
-                    )
-
-                    for i in range(len(sl_candles)):
-                        c = sl_candles.iloc[i]
-
-                        sl_exit = self.check_position(position, c)
-
-                        if sl_exit is not None and sl_exit["type"] == "sl":
-                            self.close_count = self.close_count + 1
-                            self.close(position, candle, exit_price["price"])
-                            closed = True
-                            break
-
-                    if not closed and exit_price["type"] == "tp":
-                        self.close_count = self.close_count + 1
-                        self.close(position, candle, exit_price["price"])
-
-
-        if candle["crosspoint"] == True:
-            entry_price = candle["Close"]
-            crossover_type = "long" if candle["crossover_pos"] == 1 else "short"
-            stoploss = None
-            target = None
-
-            self.count = self.count + 1
-
-            if crossover_type == "short":
-                stoploss = entry_price + self.stoploss
-                target = entry_price - self.target
-
-            if crossover_type == "long":
-                stoploss = entry_price - self.stoploss
-                target = entry_price + self.target
-
-            self.open(
-                entry_date=candle.name,
-                entry_price=entry_price,
-                stoploss=stoploss,
-                target=target,
-                size=self.size,
-                crossover_type=crossover_type,
-            )
-
-    def strategy2(self, candle):
-        
+with open("public/data.json", "w") as outfile:
+    outfile.write(result)

@@ -59,20 +59,22 @@ export default function Home() {
     const lineSeries2 = chart.addLineSeries({ color: "#808000" });
 
     axios.get("/data.json").then((res: any) => {
-      const candles = res.data.candles.map((c: any) => ({
-        ...c,
-        dx: c.dx / 1000,
-      }));
+      const candles = res.data.candles
+        .sort((a: any, b: any) => a.time - b.time)
+        .map((c: any) => ({
+          ...c,
+          dx: c.dx / 1000,
+        }));
 
       console.log(candles);
 
       candlestickSeries.setData(
         candles.map((c: any) => ({
-          time: c.dx,
-          open: c.Open,
-          high: c.High,
-          low: c.Low,
-          close: c.Close,
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
           sma: c.small_ema,
           lma: c.large_ema,
         }))
@@ -80,14 +82,14 @@ export default function Home() {
 
       lineSeries.setData(
         candles.map((c: any) => ({
-          time: c.dx,
+          time: c.time,
           value: c.small_ema,
         }))
       );
 
       lineSeries2.setData(
         candles.map((c: any) => ({
-          time: c.dx,
+          time: c.time,
           value: c.large_ema,
         }))
       );
@@ -96,7 +98,7 @@ export default function Home() {
         candles
           .filter((c: any) => c.signal)
           .map((c: any) => ({
-            time: c.dx,
+            time: c.time,
             position: "aboveBar",
             color: "#f68410",
             shape: "circle",

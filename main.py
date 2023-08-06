@@ -5,14 +5,18 @@ import yfinance as yf
 from modules.positions import Positions
 from modules.backtester import Backtest
 
+from setup.mongo import mgo
+from pprint import pprint as log
+
 import numpy as np
 
 import json
 
-# Configuration``
-ticker = ""
+
+# Configuration
+ticker = "EURUSD=X"
 period = ""
-balance=1000
+balance = 1000
 sma_span = 8
 lma_span = 40
 threshold = 0.0003
@@ -100,7 +104,7 @@ def opener(candle, params, open):
             target = entry_price + params["tgt"]
 
         open(
-            entry_date=candle['dt'],
+            entry_date=candle["dt"],
             entry_price=entry_price,
             stoploss=stoploss,
             target=target,
@@ -129,93 +133,37 @@ class Tester(Backtest):
     def run(self):
         if self.ticker_data is None:
             raise Exception("No ticker data to run backtest on")
-
-        check_signals(self.ticker_data, sma_span, lma_span, threshold)
-
-        # Skip first 200 candles
-        start_index = lma_span
-
-        while start_index < len(self.ticker_data) -1:
-            candle = self.ticker_data.iloc[start_index]
-            
-            pos_consolidator(self.positions, candle, self.close)
-            opener(
-                candle,
-                {
-                    "sl": stoploss,
-                    "tgt": reward_ratio * stoploss,
-                    'size': size
-                },
-                self.open,
-            )
-            
-            start_index = start_index + 1
-
-        self.calc_stats()
-
-    def calc_stats(self):
-        crosspoints = len(
-            self.ticker_data[lma_span :][self.ticker_data["signal"] == True]
-        )
         
-        # print("Trade Book", self.trade_book)
+        data = []
+        
+        for candle in self.ticker_data:
+            c = candle['candle']
+            
+            
+            
+            c['dt'] = None
+            c['signal'] = candle['signal']
+            data.append(c)
+            
+        self.data = data    
+        
+        log(data[0])
+        
+t = Tester({"sl": stoploss, "reward_ratio": reward_ratio, "balance": balance})
 
-        total_trades = len(self.trade_book)
-        profitable_trades = self.trade_book[self.trade_book["PnL"] > 0]
-        losing_trades = self.trade_book[self.trade_book["PnL"] < 0]
-        win_percentage = total_trades > 0 and len(profitable_trades) / total_trades * 100
-        lose_percentage = total_trades > 0 and len(losing_trades) / total_trades * 100
+data = mgo.candles.find()
 
-        self.stats = {
-            **self.stats,
-            "date_range": total_trades > 0 and f'{self.trade_book["entry_date"].iloc[0]} - {self.trade_book["exit_date"].iloc[-1]}',
-            "open_positions": self.positions.count(),
-            "open_counter": self.count,
-            "close_counter": self.close_count,
-            "total_trades": total_trades,
-            "crosspoints_count": crosspoints,
-            "sma_span": sma_span,
-            "lma_span": lma_span,
-            "total_trades": len(self.trade_book),
-            "pnl": self.trade_book["PnL"].sum(),
-            "initial_balance": self.start_balance,
-            "trade_size": size,
-            "stoploss": self.stoploss,
-            "target": self.target,
-            "profitable_trades": profitable_trades,
-            "losing_trades": losing_trades,
-            "profitable_trades_count": len(profitable_trades),
-            "losing_trades_count": len(losing_trades),
-            "win_percentage": win_percentage,
-            "lose_percentage": lose_percentage
-        }
-
-
-t = Tester({
-    'sl': stoploss,
-    'reward_ratio': reward_ratio,
-    'balance': balance
-    })
-
-tdata = yf.download("EURUSD=X", period="10d", interval="15m")
-tdata['dt'] = tdata.index
-tdata['dx'] = tdata['dt'].apply(lambda x: int(round(x.timestamp() * 1000)))
-
-print(tdata)
-
-t.load_data(tdata)
+t.load_data(data)
 t.run()
 
-# print(t.stats)
+data = t.ticker_data
 
-tdata = t.ticker_data
-
-tdata['dt'] = tdata['dt'].astype(str)
-
-result = json.dumps({
-    'candles': tdata.to_dict('records'),
-    # 'stats': t.stats.to_dict('records'),
-})
+result = json.dumps(
+    {
+        "candles": t.data,
+        # 'stats': t.stats.to_dict('records'),
+    }
+)
 
 with open("public/data.json", "w") as outfile:
     outfile.write(result)

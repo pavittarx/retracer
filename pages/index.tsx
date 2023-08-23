@@ -3,6 +3,8 @@ import { ChartOptions, DeepPartial, createChart } from "lightweight-charts";
 import axios from "axios";
 
 const Tooltip = ({ x, y, ...data }: any) => {
+  console.log("dx", data);
+
   return (
     <>
       <div
@@ -19,10 +21,14 @@ const Tooltip = ({ x, y, ...data }: any) => {
         }}
       >
         <div>Close : {data?.close?.toFixed(5)}</div>
-        <div>SMA : {data?.sma?.toFixed(5)}</div>
+        <div>SMA High : {data?.sma_high?.toFixed(5)}</div>
+        <div>SMA Low : {data?.sma_low?.toFixed(5)}</div>
         <div>LMA : {data?.lma?.toFixed(5)}</div>
         <div>
-          Diff : {(data?.lma?.toFixed(5) - data?.sma?.toFixed(5))?.toFixed(5)}
+          Low Diff : {data?.lma?.toFixed(5) - data?.sma_low?.toFixed(5)}
+        </div>
+        <div>
+          High Diff : {data?.lma?.toFixed(5) - data?.sma_high?.toFixed(5)}
         </div>
       </div>
     </>
@@ -55,7 +61,8 @@ export default function Home() {
       wickDownColor: "#ef5350",
     });
 
-    const lineSeries = chart.addLineSeries({ color: "#2962FF" });
+    const lineSeriesSMA_low = chart.addLineSeries({ color: "#2962FF" });
+    const lineSeriesSMA_high = chart.addLineSeries({ color: "#e2821c" });
     const lineSeries2 = chart.addLineSeries({ color: "#808000" });
 
     axios.get("/data.json").then((res: any) => {
@@ -75,15 +82,20 @@ export default function Home() {
           high: c.high,
           low: c.low,
           close: c.close,
-          sma: c.small_ema,
-          lma: c.large_ema,
         }))
       );
 
-      lineSeries.setData(
+      lineSeriesSMA_low.setData(
         candles.map((c: any) => ({
           time: c.time,
-          value: c.small_ema,
+          value: c.small_ema_low,
+        }))
+      );
+
+      lineSeriesSMA_high.setData(
+        candles.map((c: any) => ({
+          time: c.time,
+          value: c.small_ema_high,
         }))
       );
 
@@ -110,7 +122,8 @@ export default function Home() {
         if (!param?.time) return;
 
         const data = param.seriesData.get(candlestickSeries);
-        const sma = param.seriesData.get(lineSeries);
+        const sma_low = param.seriesData.get(lineSeriesSMA_low);
+        const sma_high = param.seriesData.get(lineSeriesSMA_high);
         const lma = param.seriesData.get(lineSeries2);
 
         console.log(param);
@@ -118,7 +131,8 @@ export default function Home() {
         setTooltip({
           ...param?.point,
           ...(data || {}),
-          sma: sma.value,
+          sma_low: sma_low.value,
+          sma_high: sma_high.value,
           lma: lma.value,
         });
       });
@@ -126,7 +140,6 @@ export default function Home() {
 
     chart.timeScale().applyOptions({
       borderColor: "#71649C",
-      // barSpacing: 10,
       timeVisible: true,
     });
   }, [ref]);
